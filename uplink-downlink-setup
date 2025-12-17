@@ -8,7 +8,7 @@ import json
 # CONFIGURATION
 # ======================================================
 
-ENDPOINT = "a5i1z9q3oh700-ats.iot.ap-southeast-2.amazonaws.com"
+ENDPOINT = "<arn>.amazonaws.com"
 PORT = 8883
 
 TOPIC_PUB = "devices/my_local_gateway_01/telemetry"
