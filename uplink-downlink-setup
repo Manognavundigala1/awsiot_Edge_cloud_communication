@@ -8,11 +8,13 @@ import json
 # CONFIGURATION
 # ======================================================
 
-ENDPOINT = "<arn>.amazonaws.com"
+ENDPOINT = "a5i1z9q3oh700-ats.iot.ap-southeast-2.amazonaws.com"
 PORT = 8883
 
-TOPIC_PUB = "devices/my_local_gateway_01/telemetry"
-TOPIC_SUB = "devices/my_local_gateway_01/commands"
+DEVICE_ID = "my_local_gateway_01"
+STATUS_TOPIC = f"devices/{DEVICE_ID}/status"
+TOPIC_PUB = f"devices/{DEVICE_ID}/telemetry"
+TOPIC_SUB = f"devices/{DEVICE_ID}/commands"
 
 CA   = r"C:\Users\Dell\Documents\certs\AmazonRootCA1.pem"
 CERT = r"C:\Users\Dell\Documents\certs\device-certificate.pem.crt"
@@ -37,14 +39,23 @@ os.makedirs(DOWNLINK_DIR, exist_ok=True)
 
 def on_connect(client, userdata, flags, rc):
     print("Connected to AWS IoT Core, rc =", rc)
-    client.subscribe(TOPIC_SUB)
+    print("Session present:", flags.get("session present"))
+
+    # Publish ONLINE status (critical)
+    client.publish(
+        STATUS_TOPIC,
+        json.dumps({"state": "online", "ts": time.time()}),
+        qos=1,
+        retain=True
+    )
+
+    client.subscribe(TOPIC_SUB, qos=1)
     print(f"Subscribed to {TOPIC_SUB}")
 
 def on_message(client, userdata, msg):
     message = msg.payload.decode()
     print(f"[Downlink] {message}")
 
-    # STORE DOWNLINK LOCALLY
     filename = f"command_{int(time.time())}.json"
     with open(os.path.join(DOWNLINK_DIR, filename), "w") as f:
         f.write(message)
@@ -53,7 +64,11 @@ def on_message(client, userdata, msg):
 # MQTT CLIENT SETUP
 # ======================================================
 
-client = mqtt.Client(client_id="my_local_gateway_01", protocol=mqtt.MQTTv311)
+client = mqtt.Client(
+    client_id=DEVICE_ID,
+    clean_session=False,
+    protocol=mqtt.MQTTv311
+)
 
 client.tls_set(
     ca_certs=CA,
@@ -65,14 +80,15 @@ client.tls_set(
 client.on_connect = on_connect
 client.on_message = on_message
 
+# Last Will (offline)
 client.will_set(
-    "devices/my_local_gateway_01/status",
-    "offline",
+    STATUS_TOPIC,
+    json.dumps({"state": "offline", "ts": time.time()}),
     qos=1,
     retain=True
 )
 
-client.connect(ENDPOINT, PORT)
+client.connect(ENDPOINT, PORT, keepalive=60)
 client.loop_start()
 
 # ======================================================
@@ -82,7 +98,7 @@ client.loop_start()
 try:
     while True:
         payload = {
-            "device_id": "my_local_gateway_01",
+            "device_id": DEVICE_ID,
             "temperature": 25.2,
             "status": "running",
             "timestamp": time.time()
@@ -95,13 +111,22 @@ try:
         with open(os.path.join(UPLINK_DIR, filename), "w") as f:
             f.write(payload_json)
 
-        # SEND REAL-TIME
-        client.publish(TOPIC_PUB, payload_json)
+        # SEND REAL-TIME (QoS 1 recommended)
+        client.publish(TOPIC_PUB, payload_json, qos=1)
         print(f"[Uplink] {payload_json}")
 
         time.sleep(TELEMETRY_INTERVAL)
 
 except KeyboardInterrupt:
     print("Shutting down edge application...")
+
+finally:
+    # Graceful shutdown
+    client.publish(
+        STATUS_TOPIC,
+        json.dumps({"state": "offline", "ts": time.time()}),
+        qos=1,
+        retain=True
+    )
     client.loop_stop()
     client.disconnect()
